@@ -83,59 +83,238 @@ graph TB
     QM --> CI
 ```
 
-### Technical Implementation
+### AI Processing Architecture Decision
 
-#### Evidence Processing Flow
+#### Option A: Vector Database Approach (Recommended)
 ```mermaid
 sequenceDiagram
     participant User
     participant Bubble as Bubble App
-    participant Queue as Processing Queue
+    participant Extract as Content Extractor
+    participant Vector as Vector DB
     participant Bedrock as AWS Bedrock
-    participant DB as Database
     
-    User->>Bubble: Upload Evidence Files
-    Bubble->>DB: Store File Metadata
-    Bubble->>Queue: Queue Processing Job
+    User->>Bubble: Upload Document
+    Bubble->>Extract: Process Document
+    Extract->>Extract: OCR/Text Extraction
+    Extract->>Bedrock: Generate Embeddings
+    Bedrock->>Vector: Store Document Vectors
+    Vector->>Bubble: Confirm Storage
     
-    Queue->>Bubble: Extract File Content
-    Bubble->>Bubble: OCR/Text Extraction
-    Bubble->>Bedrock: Send Content + Control Context
+    Note over User,Bubble: Document processed once, stored for reuse
     
-    Bedrock->>Bedrock: Analyze Against Controls
+    User->>Bubble: Run Audit
+    Bubble->>Vector: Query Relevant Evidence
+    Vector->>Bubble: Return Matching Documents
+    Bubble->>Bedrock: Analyze with Control Context
     Bedrock->>Bubble: Return Audit Results
-    
-    Bubble->>DB: Store Audit Results
-    Bubble->>User: Display Feedback & Recommendations
-    
-    Note over User,DB: Process repeats for each control
 ```
 
-#### Chat Interface Implementation
+#### Option B: Direct API Approach
 ```mermaid
 sequenceDiagram
     participant User
-    participant Chat as Chat Interface
-    participant KB as Knowledge Base
+    participant Bubble as Bubble App
+    participant Storage as File Storage
     participant Bedrock as AWS Bedrock
-    participant Usage as Usage Tracker
     
-    User->>Chat: Ask Question
-    Chat->>KB: Retrieve Relevant Context
-    Chat->>Bedrock: Send Query + Context
+    User->>Bubble: Upload Document
+    Bubble->>Storage: Store Raw Document
+    Storage->>Bubble: Confirm Storage
     
-    Bedrock->>Bedrock: Generate Response
-    Bedrock->>Chat: Return Expert Guidance
+    Note over User,Bubble: Document stored as-is
     
-    Chat->>Usage: Log Usage Metrics
-    Chat->>User: Display Response
+    User->>Bubble: Run Audit
+    Bubble->>Storage: Retrieve Documents
+    Storage->>Bubble: Return Raw Files
+    Bubble->>Bedrock: Process + Analyze (Real-time)
+    Bedrock->>Bubble: Return Audit Results
     
-    alt Follow-up Question
-        User->>Chat: Follow-up Query
-        Chat->>Bedrock: Send with Session Context
-        Bedrock->>Chat: Contextual Response
-        Chat->>User: Display Response
+    Note over Bedrock,Bubble: Heavy processing on every audit
+```
+
+#### Comparison Analysis
+
+| Aspect | Vector DB Approach | Direct API Approach |
+|--------|-------------------|-------------------|
+| **Initial Processing** | Heavy (once per document) | Light (store only) |
+| **Audit Performance** | Fast (pre-processed) | Slow (process each time) |
+| **Cost per Audit** | Low (cached embeddings) | High (full reprocessing) |
+| **Storage Requirements** | Higher (vectors + raw) | Lower (raw files only) |
+| **Scalability** | Excellent | Poor with volume |
+| **Multi-language Support** | Better (embedding models) | Depends on multimodal AI |
+| **Search Capabilities** | Semantic search enabled | Limited to full document |
+| **Complexity** | Higher initial setup | Simpler architecture |
+
+### Technical Implementation
+
+#### Recommended Architecture: Hybrid Vector + Direct Processing
+
+```mermaid
+graph TD
+    subgraph "Document Upload Flow"
+        UP[Document Upload] --> PROC[Content Processor]
+        PROC --> OCR[OCR/Text Extraction]
+        PROC --> META[Metadata Extraction]
+        OCR --> CHUNK[Text Chunking]
+        CHUNK --> EMB[Generate Embeddings]
+        EMB --> VDB[(Vector Database)]
+        META --> BDB[(Bubble Database)]
+        UP --> RAW[(Raw File Storage)]
     end
+    
+    subgraph "Audit Processing Flow"
+        AUDIT[Run Audit] --> QUERY[Query Vector DB]
+        QUERY --> MATCH[Find Relevant Chunks]
+        MATCH --> CONTEXT[Build Context]
+        CONTEXT --> AI[Bedrock Analysis]
+        AI --> RESULT[Audit Results]
+        
+        AUDIT --> DIRECT[Direct File Analysis]
+        DIRECT --> MULTIMODAL[Multimodal AI]
+        MULTIMODAL --> VISUAL[Visual Analysis]
+        VISUAL --> RESULT
+    end
+    
+    subgraph "Storage Layer"
+        VDB --> SEMANTIC[Semantic Search]
+        BDB --> METADATA[Metadata Queries]
+        RAW --> ORIGINAL[Original Documents]
+    end
+```
+
+#### Processing Strategy by Document Type
+
+**Text Documents (PDFs, Word, etc.)**
+- Extract text → Generate embeddings → Store in vector DB
+- Enable semantic search and context retrieval
+- Fast audit processing using pre-computed vectors
+
+**Visual Documents (Images, Charts, Diagrams)**
+- Store original files → Direct multimodal AI processing
+- Use Claude 3.5 Sonnet or GPT-4V for visual analysis
+- Process on-demand during audits
+
+**Structured Data (Spreadsheets, JSON)**
+- Extract structured data → Store in Bubble database
+- Generate embeddings for text fields
+- Direct processing for calculations/validations
+
+#### Implementation Details
+
+**Vector Database Options:**
+1. **AWS OpenSearch** (Recommended for AWS ecosystem)
+2. **Pinecone** (Managed, easy to use)
+3. **Chroma** (Open source, self-hosted)
+4. **Bubble Plugin** (Vector search plugins available)
+
+**Processing Pipeline:**
+```mermaid
+graph LR
+    DOC[Document] --> TYPE{Document Type}
+    
+    TYPE -->|Text| TEXT_FLOW[Text Processing]
+    TYPE -->|Image| IMG_FLOW[Image Processing]
+    TYPE -->|Mixed| HYBRID_FLOW[Hybrid Processing]
+    
+    TEXT_FLOW --> EXTRACT[Text Extraction]
+    EXTRACT --> CHUNK[Chunking Strategy]
+    CHUNK --> EMBED[Embeddings Generation]
+    EMBED --> STORE_V[(Vector Store)]
+    
+    IMG_FLOW --> STORE_R[(Raw Storage)]
+    STORE_R --> DIRECT[Direct AI Processing]
+    
+    HYBRID_FLOW --> EXTRACT
+    HYBRID_FLOW --> STORE_R
+```
+
+**Chunking Strategy:**
+- **Semantic Chunking**: Split by paragraphs, sections
+- **Overlap**: 20% overlap between chunks for context
+- **Size**: 500-1000 tokens per chunk
+- **Metadata**: Include document source, page numbers, control mappings
+
+#### Cost Analysis: Vector DB vs Direct API
+
+```mermaid
+graph TD
+    subgraph "Vector DB Approach Costs"
+        VDB_SETUP[Initial Setup: $500-2000]
+        VDB_STORAGE[Storage: $0.10/GB/month]
+        VDB_EMBED[Embeddings: $0.0001/1K tokens]
+        VDB_QUERY[Queries: $0.001/query]
+        VDB_TOTAL[Total: Lower long-term cost]
+    end
+    
+    subgraph "Direct API Approach Costs"
+        API_SETUP[Initial Setup: $100-500]
+        API_STORAGE[Storage: $0.05/GB/month]
+        API_PROCESS[Processing: $3-15/1M tokens]
+        API_MULTIMODAL[Multimodal: $10-50/1K images]
+        API_TOTAL[Total: Higher per-audit cost]
+    end
+    
+    VDB_TOTAL --> BREAK_EVEN[Break-even: ~100 audits]
+    API_TOTAL --> BREAK_EVEN
+```
+
+#### Performance Comparison
+
+| Metric | Vector DB | Direct API |
+|--------|-----------|------------|
+| **Document Upload** | 30-60 seconds | 1-5 seconds |
+| **Audit Runtime** | 5-15 seconds | 30-120 seconds |
+| **Concurrent Audits** | High (cached data) | Limited (processing bottleneck) |
+| **Search Accuracy** | Semantic matching | Full document context |
+| **Memory Usage** | Low (vector queries) | High (full document processing) |
+
+#### Recommended Implementation Strategy
+
+**Phase 1: Start with Direct API**
+- Faster initial development
+- Lower upfront complexity
+- Validate user workflows and requirements
+
+**Phase 2: Migrate to Vector DB**
+- Implement when you have >50 active customers
+- Add vector processing for text documents
+- Keep direct processing for images/complex visuals
+
+**Phase 3: Hybrid Optimization**
+- Smart routing based on document type
+- Caching layer for frequently accessed content
+- Advanced semantic search capabilities
+
+#### Code Implementation Approach
+
+**Bubble Workflow for Vector DB:**
+```javascript
+// Pseudo-code for Bubble backend workflow
+When Document is uploaded:
+  1. Extract text content
+  2. Generate embeddings via Bedrock API
+  3. Store vectors in external vector DB
+  4. Store metadata in Bubble database
+  
+When Audit is triggered:
+  1. Query vector DB for relevant content
+  2. Retrieve top-k similar chunks
+  3. Send context + control requirements to Bedrock
+  4. Process AI response and store results
+```
+
+**Bubble Workflow for Direct API:**
+```javascript
+// Pseudo-code for direct processing
+When Document is uploaded:
+  1. Store file in Bubble file storage
+  2. Extract basic metadata only
+  
+When Audit is triggered:
+  1. Retrieve all documents for control
+  2. Send files directly to Bedrock multimodal
+  3. Process response and store results
 ```
 
 #### Knowledge Base Structure
@@ -466,3 +645,93 @@ graph LR
 ---
 
 *This document serves as the foundation for implementing the AI Auditor feature. Regular updates will be made as requirements evolve and implementation progresses.*
+
+#### Chat Interface Implementation with Vector Context
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Chat as Chat Interface
+    participant Vector as Vector DB
+    participant KB as Knowledge Base
+    participant Bedrock as AWS Bedrock
+    participant Usage as Usage Tracker
+    
+    User->>Chat: Ask Question about Evidence
+    Chat->>Vector: Semantic Search for Relevant Evidence
+    Chat->>KB: Retrieve Control Requirements
+    Vector->>Chat: Return Matching Evidence Chunks
+    KB->>Chat: Return Control Context
+    
+    Chat->>Bedrock: Send Query + Evidence + Control Context
+    Bedrock->>Bedrock: Generate Expert Response
+    Bedrock->>Chat: Return Guidance with Citations
+    
+    Chat->>Usage: Log Usage Metrics
+    Chat->>User: Display Response with Evidence References
+    
+    alt Follow-up Question
+        User->>Chat: Follow-up Query
+        Chat->>Bedrock: Send with Full Session Context
+        Bedrock->>Chat: Contextual Response
+        Chat->>User: Display Response
+    end
+```
+
+#### Code Implementation Approaches
+
+**Bubble Workflow for Vector DB:**
+```javascript
+// Pseudo-code for Bubble backend workflow
+When Document is uploaded:
+  1. Extract text content using OCR/parsing
+  2. Generate embeddings via Bedrock Titan
+  3. Store vectors in external vector DB (OpenSearch/Pinecone)
+  4. Store metadata in Bubble database
+  
+When Audit is triggered:
+  1. Query vector DB for relevant content by control
+  2. Retrieve top-k similar chunks (k=5-10)
+  3. Build context with control requirements
+  4. Send to Bedrock Claude for analysis
+  5. Process AI response and store results
+```
+
+**Bubble Workflow for Direct API:**
+```javascript
+// Pseudo-code for direct processing
+When Document is uploaded:
+  1. Store file in Bubble file storage
+  2. Extract basic metadata (filename, size, type)
+  
+When Audit is triggered:
+  1. Retrieve all documents for specific control
+  2. Send files directly to Bedrock multimodal API
+  3. Include control requirements in prompt
+  4. Process response and store results
+```
+
+**Hybrid Approach Implementation:**
+```javascript
+// Smart routing based on document characteristics
+When Document is uploaded:
+  if (document.type === 'text' || document.type === 'pdf') {
+    // Vector DB processing
+    processForVectorStorage(document)
+  } else if (document.type === 'image' || document.hasVisualElements) {
+    // Direct multimodal processing
+    storeForDirectProcessing(document)
+  } else {
+    // Default to vector processing
+    processForVectorStorage(document)
+  }
+
+When Audit is triggered:
+  textEvidence = queryVectorDB(control.requirements)
+  visualEvidence = getDirectProcessingFiles(control.id)
+  
+  results = combineAnalysis(
+    analyzeTextEvidence(textEvidence),
+    analyzeVisualEvidence(visualEvidence)
+  )
+```
